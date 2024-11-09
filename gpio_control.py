@@ -10,7 +10,7 @@ from time import sleep
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 running = True
-temp_humidity_str = ""
+temp_humidity_str = "Loading DHT11..."
 host_name = "0.0.0.0"  # Change this to your Raspberry Pi IP address
 host_port = 8080  # Cam feed running on port 8000
 
