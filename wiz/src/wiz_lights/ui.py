@@ -32,7 +32,8 @@ def prompt_user_selection(lights: List[str], info: Dict[str, dict]) -> List[str]
             pretty += f" - {name}"
         print(f"  [{i}] {pretty}")
 
-    sel = input("\nEnter comma-separated indices to select lights (or 'a' for all) [a]: ").strip()
+    print(f"\n{len(lights)} light(s) found. Default: use all lights.")
+    sel = input("Enter comma-separated indices to select specific lights, or press Enter for all [all]: ").strip()
     if sel.lower() in ("", "a", "all"):
         return lights
     chosen = []

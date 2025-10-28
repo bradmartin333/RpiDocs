@@ -9,7 +9,7 @@ requires-python = ">=3.12"
 dependencies = []
 
 [project.optional-dependencies]
-audio = ["pyaudio"]
+audio = ["pyaudio", "numpy"]
 
 [project.scripts]
 wiz-lights = "wiz_lights:main"

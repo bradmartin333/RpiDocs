@@ -15,15 +15,32 @@ A Python package for discovering and controlling WIZ smart lights on your local 
 Using `uv` (recommended):
 
 ```bash
-cd python
+cd wiz
 uv sync
 ```
 
-With optional audio support for reactive mode:
+### Optional Audio Support for Reactive Mode
 
+To enable the reactive mode (audio-responsive lighting), you need to install PyAudio.
+
+**On Debian/Ubuntu:**
 ```bash
+sudo apt install portaudio19-dev
+cd wiz
 uv sync --extra audio
 ```
+
+**On other systems:**
+- macOS: `brew install portaudio`
+- Other Linux: Install portaudio development package for your distribution
+
+Then install the Python package:
+```bash
+cd wiz
+uv sync --extra audio
+```
+
+**Note:** If you don't install PyAudio, reactive mode will fall back to a simulated mode.
 
 ## Usage
 
@@ -67,7 +84,7 @@ python -m wiz_lights
 ## Project Structure
 
 ```
-python/
+wiz/
 ├── pyproject.toml          # Project configuration (uv)
 ├── .python-version         # Python version specification
 └── src/

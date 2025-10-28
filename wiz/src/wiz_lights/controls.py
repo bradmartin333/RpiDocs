@@ -269,12 +269,15 @@ def run_reactive(ips: List[str], stop_event: threading.Event = None, duration=No
     """
     print("Running reactive mode. Press Enter to stop or change mode.")
     
-    # Try to import PyAudio
+    # Try to import PyAudio and numpy
     try:
         import pyaudio
         import numpy as np
-    except ImportError:
-        print("\nError: PyAudio not installed. Install with: pip install pyaudio")
+    except ImportError as e:
+        missing = str(e).split("'")[1] if "'" in str(e) else "PyAudio or NumPy"
+        print(f"\nError: {missing} not installed.")
+        print("Install with: uv sync --extra audio")
+        print("Or on Debian/Ubuntu: sudo apt install portaudio19-dev && uv sync --extra audio")
         print("Falling back to simulated reactive mode...")
         time.sleep(2)
         # Fallback to simulated mode
