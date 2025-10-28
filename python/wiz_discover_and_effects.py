@@ -30,6 +30,7 @@ Notes:
  - Press Ctrl+C to exit the program completely.
  - Discovered bulbs are cached for faster startup. Use rescan option to refresh.
  - Reactive mode requires PyAudio library (install with: pip install pyaudio)
+ - Type 'tui' at the control menu for an interactive arrow-key selector (Unix/Linux only)
 """
 
 import socket
@@ -339,27 +340,167 @@ def change_bulb_selection(lights: List[str], info: Dict[str, dict], current: Lis
             pass
     return chosen if chosen else current
 
+def choose_effect_tui() -> str:
+    """
+    Interactive TUI for selecting controls using arrow keys.
+    Falls back to simple input on Windows or if curses unavailable.
+    """
+    # Define all controls with categories
+    controls = [
+        ("🌈 RAINBOW CONTROLS", [
+            ("rainbow_in_unison", "all lights cycle colors together"),
+            ("rainbow", "lights cycle colors with offsets"),
+            ("party", "random colorful flashing"),
+            ("fungi", "psychedelic funky animation"),
+        ]),
+        ("🎃 THEMED CONTROLS", [
+            ("spooky", "Halloween orange/purple flickers"),
+            ("seasonal", "colors based on current season"),
+            ("danger", "scary red strobe alarm"),
+        ]),
+        ("⛈️  NATURE CONTROLS", [
+            ("lightning", "stormy skies with lightning"),
+            ("waterfall", "flowing blues and white"),
+        ]),
+        ("🎵 INTERACTIVE", [
+            ("reactive", "responds to microphone audio"),
+            ("synth", "flash colors with number keys"),
+        ]),
+        ("⚙️  UTILITIES", [
+            ("white", "set to white color temperature"),
+            ("rgba", "set custom RGBA color"),
+        ]),
+        ("📋 OPTIONS", [
+            ("change_bulbs", "select different bulbs"),
+            ("rescan", "scan network for new bulbs"),
+        ]),
+    ]
+    
+    # Flatten controls list for navigation
+    flat_controls = []
+    for category, items in controls:
+        for name, desc in items:
+            flat_controls.append((name, desc, category))
+    
+    # Try to use curses for interactive selection
+    if sys.platform != 'win32':
+        try:
+            import curses
+            
+            def draw_menu(stdscr, selected_idx):
+                stdscr.clear()
+                height, width = stdscr.getmaxyx()
+                
+                # Title
+                title = "INTERACTIVE CONTROL SELECTOR"
+                stdscr.addstr(0, (width - len(title)) // 2, title, curses.A_BOLD)
+                stdscr.addstr(1, 0, "="*width)
+                
+                # Instructions
+                instructions = "Use ↑/↓ arrows to navigate, Enter to select, 'q' to cancel"
+                stdscr.addstr(2, (width - len(instructions)) // 2, instructions)
+                stdscr.addstr(3, 0, "="*width)
+                
+                # Display controls
+                current_category = None
+                row = 4
+                
+                for idx, (name, desc, category) in enumerate(flat_controls):
+                    if row >= height - 2:
+                        break
+                    
+                    # Show category header if changed
+                    if category != current_category:
+                        if row < height - 2:
+                            stdscr.addstr(row, 0, f"\n{category}")
+                            row += 2
+                            current_category = category
+                    
+                    if row >= height - 2:
+                        break
+                    
+                    # Highlight selected item
+                    if idx == selected_idx:
+                        stdscr.addstr(row, 2, f"→ {name}", curses.A_REVERSE)
+                        stdscr.addstr(row, 4 + len(name), f" - {desc}", curses.A_REVERSE)
+                    else:
+                        stdscr.addstr(row, 2, f"  {name}")
+                        stdscr.addstr(row, 4 + len(name), f" - {desc}")
+                    
+                    row += 1
+                
+                stdscr.refresh()
+            
+            def select_with_curses(stdscr):
+                curses.curs_set(0)  # Hide cursor
+                selected_idx = 0
+                
+                while True:
+                    draw_menu(stdscr, selected_idx)
+                    key = stdscr.getch()
+                    
+                    if key == curses.KEY_UP and selected_idx > 0:
+                        selected_idx -= 1
+                    elif key == curses.KEY_DOWN and selected_idx < len(flat_controls) - 1:
+                        selected_idx += 1
+                    elif key == ord('\n') or key == curses.KEY_ENTER:
+                        return flat_controls[selected_idx][0]
+                    elif key == ord('q') or key == ord('Q'):
+                        return "rainbow_in_unison"  # Default
+            
+            result = curses.wrapper(select_with_curses)
+            return result
+            
+        except Exception as e:
+            print(f"TUI unavailable ({e}), using numbered menu...")
+    
+    # Fallback to numbered menu
+    print("\n" + "="*60)
+    print("INTERACTIVE CONTROL SELECTOR".center(60))
+    print("="*60)
+    
+    for idx, (name, desc, category) in enumerate(flat_controls):
+        print(f"  {idx+1:2d}) {name:20s} - {desc}")
+    
+    print("\n" + "="*60)
+    
+    while True:
+        try:
+            choice = input(f"Select control (1-{len(flat_controls)}) [1]: ").strip()
+            if not choice:
+                return flat_controls[0][0]
+            
+            idx = int(choice) - 1
+            if 0 <= idx < len(flat_controls):
+                return flat_controls[idx][0]
+            else:
+                print(f"Please enter a number between 1 and {len(flat_controls)}")
+        except ValueError:
+            print("Please enter a valid number")
+        except (EOFError, KeyboardInterrupt):
+            return "rainbow_in_unison"
+
 def choose_effect() -> str:
     """
-    Display available effects menu and get user choice.
+    Display available controls menu and get user choice.
     Now organized by category for better usability.
     """
     print("\n" + "="*60)
-    print("AVAILABLE EFFECTS".center(60))
+    print("AVAILABLE CONTROLS".center(60))
     print("="*60)
     
-    print("\n🌈 RAINBOW EFFECTS:")
+    print("\n🌈 RAINBOW CONTROLS:")
     print("  rainbow_in_unison - all lights cycle colors together")
     print("  rainbow           - lights cycle colors with offsets")
     print("  party             - random colorful flashing")
     print("  fungi             - psychedelic funky animation")
     
-    print("\n🎃 THEMED EFFECTS:")
+    print("\n🎃 THEMED CONTROLS:")
     print("  spooky            - Halloween orange/purple flickers")
     print("  seasonal          - colors based on current season")
     print("  danger            - scary red strobe alarm")
     
-    print("\n⛈️  NATURE EFFECTS:")
+    print("\n⛈️  NATURE CONTROLS:")
     print("  lightning         - stormy skies with lightning")
     print("  waterfall         - flowing blues and white")
     
@@ -376,8 +517,13 @@ def choose_effect() -> str:
     print("  rescan            - scan network for new bulbs")
     
     print("\n" + "="*60)
+    print("Type 'tui' for interactive menu or enter control name")
     
-    choice = input("Choose effect [rainbow_in_unison]: ").strip().lower()
+    choice = input("Choose control [rainbow_in_unison]: ").strip().lower()
+    
+    # Check if user wants TUI
+    if choice == "tui":
+        return choose_effect_tui()
     
     # Map choices to effect names
     effect_map = {
