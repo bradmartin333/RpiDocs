@@ -1,0 +1,8 @@
+
+# uv
+.venv/
+uv.lock
+
+# WIZ lights specific
+config.json
+wiz_bulb_cache.json

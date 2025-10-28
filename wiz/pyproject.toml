@@ -1,0 +1,19 @@
+[project]
+name = "wiz-lights"
+version = "0.1.0"
+description = "Control WIZ smart lights with various effects and interactive TUI"
+authors = [
+    { name = "copilot-swe-agent[bot]", email = "198982749+Copilot@users.noreply.github.com" }
+]
+requires-python = ">=3.12"
+dependencies = []
+
+[project.optional-dependencies]
+audio = ["pyaudio", "numpy"]
+
+[project.scripts]
+wiz-lights = "wiz_lights:main"
+
+[build-system]
+requires = ["uv_build>=0.9.5,<0.10.0"]
+build-backend = "uv_build"
