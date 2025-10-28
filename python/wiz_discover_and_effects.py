@@ -2,23 +2,27 @@
 """
 wiz_discover_and_effects.py
 
-Discover WIZ lights on the local network by probing 192.168.1.0-255 (no broadcasts)
+Discover WIZ lights on the local network by probing configurable IP range (no broadcasts)
 and provide simple effects:
  - rainbow_in_unison: all lights cycle through HSV colors in sync
  - rainbow: lights cycle through HSV colors with different offsets (not in unison)
  - spooky: a Halloween-ish effect (orange/purple flicker/pulse with occasional strobe)
  - white: reset lights to white at a specified color temperature in Kelvin
+ - rgba: set custom RGBA color with dimming control
+ - party: random colorful flashing party mode
+ - synth: flash bulbs using number keys like a synthesizer
 
 Usage:
     python3 wiz_discover_and_effects.py
 
 Notes:
- - This script probes each IP in the 192.168.1.* /24 range (no UDP broadcast).
+ - This script probes each IP in the configured IP range (no UDP broadcast).
  - Probing is done by sending a small JSON query to UDP port 38899 and waiting
    briefly for a response. This is slower than broadcast discovery but avoids
    sending broadcast packets as requested.
  - Effects run in the background and can be changed by pressing Enter (no need for Ctrl+C).
  - Press Ctrl+C to exit the program completely.
+ - Discovered bulbs are cached for faster startup. Use rescan option to refresh.
 """
 
 import socket
@@ -29,14 +33,69 @@ import random
 import concurrent.futures
 import threading
 import math
-from typing import Dict, List, Tuple
+import os
+import sys
+import select
+from typing import Dict, List, Tuple, Optional
 
 WIZ_PORT = 38899
 PROBE_TIMEOUT = 0.35   # seconds to wait for a single probe response
 SEND_INTERVAL = 0.12   # seconds between color updates (tweak for speed/CPU)
 
+# File paths
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+CACHE_FILE = os.path.join(SCRIPT_DIR, "wiz_bulb_cache.json")
+CONFIG_FILE = os.path.join(SCRIPT_DIR, "config.json")
+
 # A lightweight query that many WIZ bulbs will answer to
 PROBE_PAYLOAD = {"method": "getPilot", "params": {}}
+
+def load_config() -> dict:
+    """Load configuration from config.json, return defaults if not found."""
+    default_config = {"base_ip": "192.168.1"}
+    if not os.path.exists(CONFIG_FILE):
+        # Create default config file
+        try:
+            with open(CONFIG_FILE, 'w') as f:
+                json.dump(default_config, f, indent=2)
+        except Exception as e:
+            print(f"Warning: Could not create config file: {e}")
+        return default_config
+    
+    try:
+        with open(CONFIG_FILE, 'r') as f:
+            config = json.load(f)
+            # Ensure base_ip exists
+            if "base_ip" not in config:
+                config["base_ip"] = "192.168.1"
+            return config
+    except Exception as e:
+        print(f"Warning: Could not load config file: {e}")
+        return default_config
+
+def save_cache(discovered: Dict[str, dict]) -> None:
+    """Save discovered bulbs to cache file."""
+    try:
+        with open(CACHE_FILE, 'w') as f:
+            json.dump(discovered, f, indent=2)
+    except Exception as e:
+        print(f"Warning: Could not save cache: {e}")
+
+def load_cache() -> Optional[Dict[str, dict]]:
+    """Load cached bulbs from cache file. Returns None if cache doesn't exist or is invalid."""
+    if not os.path.exists(CACHE_FILE):
+        return None
+    
+    try:
+        with open(CACHE_FILE, 'r') as f:
+            cache = json.load(f)
+            if isinstance(cache, dict) and cache:
+                return cache
+            return None
+    except Exception as e:
+        print(f"Warning: Could not load cache: {e}")
+        return None
+
 
 def probe_ip(ip: str, timeout: float = PROBE_TIMEOUT) -> Dict:
     """
@@ -77,12 +136,18 @@ def probe_ip(ip: str, timeout: float = PROBE_TIMEOUT) -> Dict:
         except Exception:
             return {"_raw": "<binary>"}
 
-def scan_192_168_1_range(start: int = 0, end: int = 255, workers: int = 60) -> Dict[str, dict]:
+def scan_ip_range(base_ip: str = "192.168.1", start: int = 0, end: int = 255, workers: int = 60) -> Dict[str, dict]:
     """
-    Scan the IPv4 range 192.168.1.start .. 192.168.1.end (inclusive) by probing each IP.
+    Scan the IPv4 range base_ip.start .. base_ip.end (inclusive) by probing each IP.
     Returns a dict mapping IP -> response dict for each responsive device.
+    
+    Args:
+        base_ip: Base IP address (e.g., "192.168.1" for 192.168.1.0-255)
+        start: Starting host number
+        end: Ending host number (inclusive)
+        workers: Number of concurrent threads for scanning
     """
-    prefix = "192.168.1."
+    prefix = base_ip + "." if not base_ip.endswith(".") else base_ip
     ips = [f"{prefix}{i}" for i in range(start, end + 1)]
     discovered: Dict[str, dict] = {}
 
@@ -116,13 +181,14 @@ def send_udp(ip: str, payload: dict) -> None:
         except Exception:
             pass
 
-def set_color_rgb(ip: str, r: int, g: int, b: int, transition: int = 0) -> None:
+def set_color_rgb(ip: str, r: int, g: int, b: int, transition: int = 0, dimming: int = 100) -> None:
     """
     Tell a WIZ light to set color using RGB values (0-255).
     Uses method 'setPilot' which is commonly supported by WIZ lights.
     transition is transition time in milliseconds (device dependent).
+    dimming is brightness level 0-100 (0 = off, 100 = full brightness).
     """
-    payload = {"method": "setPilot", "params": {"r": r, "g": g, "b": b, "transition": transition, "dimming": 100}}
+    payload = {"method": "setPilot", "params": {"r": r, "g": g, "b": b, "transition": transition, "dimming": dimming}}
     send_udp(ip, payload)
 
 def hsv_to_rgb_255(h_deg: float, s: float, v: float) -> Tuple[int, int, int]:
@@ -175,6 +241,10 @@ def prompt_user_selection(lights: List[str], info: Dict[str, dict]) -> List[str]
     Show discovered lights and prompt the user to select which ones to control.
     Returns the list of selected IP addresses.
     """
+    if not lights:
+        print("No devices discovered.")
+        return []
+    
     print("\nDiscovered WIZ lights:")
     for i, ip in enumerate(lights):
         descr = info.get(ip, {})
@@ -189,9 +259,6 @@ def prompt_user_selection(lights: List[str], info: Dict[str, dict]) -> List[str]
         if name:
             pretty += f" - {name}"
         print(f"  [{i}] {pretty}")
-    if not lights:
-        print("No devices discovered.")
-        return []
 
     sel = input("\nEnter comma-separated indices to select lights (or 'a' for all) [a]: ").strip()
     if sel.lower() in ("", "a", "all"):
@@ -209,19 +276,85 @@ def prompt_user_selection(lights: List[str], info: Dict[str, dict]) -> List[str]
             pass
     return chosen
 
+def change_bulb_selection(lights: List[str], info: Dict[str, dict], current: List[str]) -> List[str]:
+    """
+    Allow user to change the selected bulbs without rescanning.
+    Returns new selection or current selection if cancelled.
+    """
+    print("\n=== Change Bulb Selection ===")
+    print(f"Currently selected: {len(current)} bulb(s)")
+    for ip in current:
+        descr = info.get(ip, {})
+        name = ""
+        if isinstance(descr, dict):
+            if "result" in descr and isinstance(descr["result"], dict):
+                res = descr["result"]
+                name = res.get("deviceName") or res.get("moduleName") or res.get("name") or res.get("alias") or ""
+            else:
+                name = descr.get("deviceName") or descr.get("moduleName") or ""
+        print(f"  - {ip}" + (f" ({name})" if name else ""))
+    
+    print("\nAvailable lights:")
+    for i, ip in enumerate(lights):
+        descr = info.get(ip, {})
+        pretty = ip
+        name = ""
+        if isinstance(descr, dict):
+            if "result" in descr and isinstance(descr["result"], dict):
+                res = descr["result"]
+                name = res.get("deviceName") or res.get("moduleName") or res.get("name") or res.get("alias") or ""
+            else:
+                name = descr.get("deviceName") or descr.get("moduleName") or ""
+        if name:
+            pretty += f" - {name}"
+        print(f"  [{i}] {pretty}")
+    
+    sel = input("\nEnter comma-separated indices (or 'a' for all, Enter to keep current): ").strip()
+    if not sel:
+        return current
+    if sel.lower() in ("a", "all"):
+        return lights
+    chosen = []
+    for chunk in sel.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        try:
+            idx = int(chunk)
+            if 0 <= idx < len(lights):
+                chosen.append(lights[idx])
+        except ValueError:
+            pass
+    return chosen if chosen else current
+
 def choose_effect() -> str:
     print("\nAvailable effects:")
     print("  1) rainbow_in_unison  - all lights cycle through the same hues together")
     print("  2) rainbow            - lights cycle through hues with offsets (not in unison)")
     print("  3) spooky             - Halloween effect (orange/purple flicker and strobes)")
     print("  4) white              - reset to white at a specified temperature in Kelvin")
-    choice = input("Choose effect [1]: ").strip()
+    print("  5) rgba               - set custom RGBA color with dimming control")
+    print("  6) party              - random colorful flashing party mode")
+    print("  7) synth              - flash bulbs using number keys (synthesizer mode)")
+    print("  c) change_bulbs       - change selected bulbs")
+    print("  r) rescan             - rescan for bulbs")
+    choice = input("Choose effect [1]: ").strip().lower()
     if choice in ("2", "rainbow"):
         return "rainbow"
     if choice in ("3", "spooky"):
         return "spooky"
     if choice in ("4", "white"):
         return "white"
+    if choice in ("5", "rgba"):
+        return "rgba"
+    if choice in ("6", "party"):
+        return "party"
+    if choice in ("7", "synth"):
+        return "synth"
+    if choice in ("c", "change_bulbs"):
+        return "change_bulbs"
+    if choice in ("r", "rescan"):
+        return "rescan"
     return "rainbow_in_unison"
 
 def get_kelvin_temperature() -> int:
@@ -361,9 +494,206 @@ def run_white(ips: List[str], kelvin: int = 4000):
         set_color_rgb(ip, r, g, b)
     print("Done.")
 
+def get_rgba_input() -> Tuple[int, int, int, int]:
+    """
+    Prompt user to enter RGBA values.
+    Returns (r, g, b, dimming) where r, g, b are 0-255 and dimming is 0-100.
+    """
+    print("\n=== RGBA Color Control ===")
+    print("Enter color values:")
+    
+    while True:
+        try:
+            r = input("Red (0-255) [255]: ").strip()
+            r = int(r) if r else 255
+            if 0 <= r <= 255:
+                break
+            print("Please enter a value between 0 and 255.")
+        except ValueError:
+            print("Invalid input. Please enter a number.")
+    
+    while True:
+        try:
+            g = input("Green (0-255) [255]: ").strip()
+            g = int(g) if g else 255
+            if 0 <= g <= 255:
+                break
+            print("Please enter a value between 0 and 255.")
+        except ValueError:
+            print("Invalid input. Please enter a number.")
+    
+    while True:
+        try:
+            b = input("Blue (0-255) [255]: ").strip()
+            b = int(b) if b else 255
+            if 0 <= b <= 255:
+                break
+            print("Please enter a value between 0 and 255.")
+        except ValueError:
+            print("Invalid input. Please enter a number.")
+    
+    while True:
+        try:
+            alpha = input("Dimming/Alpha (0-100, where 100=brightest) [100]: ").strip()
+            alpha = int(alpha) if alpha else 100
+            if 0 <= alpha <= 100:
+                break
+            print("Please enter a value between 0 and 100.")
+        except ValueError:
+            print("Invalid input. Please enter a number.")
+    
+    return r, g, b, alpha
+
+def run_rgba(ips: List[str]):
+    """
+    Set all lights to a custom RGBA color with dimming control.
+    This is a one-time setting, not a continuous effect.
+    """
+    r, g, b, dimming = get_rgba_input()
+    print(f"Setting lights to RGB({r}, {g}, {b}) with {dimming}% brightness...")
+    for ip in ips:
+        set_color_rgb(ip, r, g, b, dimming=dimming)
+    print("Done.")
+
+def run_party(ips: List[str], stop_event: threading.Event = None, duration=None):
+    """
+    Party mode: random colorful flashing and pulsing.
+    stop_event: threading.Event to signal when to stop
+    """
+    print("Running party mode. Press Enter to stop or change mode.")
+    t0 = time.time()
+    try:
+        while True:
+            if stop_event and stop_event.is_set():
+                break
+            if duration and (time.time() - t0) >= duration:
+                break
+            
+            # Random flash pattern
+            pattern = random.choice(["all_same", "individual", "strobe"])
+            
+            if pattern == "all_same":
+                # All lights same random color
+                hue = random.uniform(0, 360)
+                sat = random.uniform(0.7, 1.0)
+                val = random.uniform(0.6, 1.0)
+                r, g, b = hsv_to_rgb_255(hue, sat, val)
+                for ip in ips:
+                    set_color_rgb(ip, r, g, b)
+                time.sleep(random.uniform(0.1, 0.4))
+            
+            elif pattern == "individual":
+                # Each light different random color
+                for ip in ips:
+                    hue = random.uniform(0, 360)
+                    sat = random.uniform(0.7, 1.0)
+                    val = random.uniform(0.5, 1.0)
+                    r, g, b = hsv_to_rgb_255(hue, sat, val)
+                    set_color_rgb(ip, r, g, b)
+                time.sleep(random.uniform(0.15, 0.5))
+            
+            elif pattern == "strobe":
+                # Quick strobe
+                for _ in range(random.randint(2, 5)):
+                    hue = random.uniform(0, 360)
+                    r, g, b = hsv_to_rgb_255(hue, 1.0, 1.0)
+                    for ip in ips:
+                        set_color_rgb(ip, r, g, b)
+                    time.sleep(0.05)
+                    for ip in ips:
+                        set_color_rgb(ip, 0, 0, 0)
+                    time.sleep(0.05)
+                time.sleep(random.uniform(0.2, 0.6))
+    
+    except KeyboardInterrupt:
+        print("\nStopping effect.")
+
+def run_synth(ips: List[str], stop_event: threading.Event = None):
+    """
+    Synth mode: Flash bulbs using number keys 1-9 and 0.
+    Each number key flashes a different color.
+    stop_event: threading.Event to signal when to stop
+    """
+    print("\n=== Synth Mode ===")
+    print("Press number keys 1-9 and 0 to flash different colors.")
+    print("Press 'q' to quit synth mode.")
+    
+    # Color mapping for each key
+    key_colors = {
+        '1': (255, 0, 0),      # Red
+        '2': (255, 127, 0),    # Orange
+        '3': (255, 255, 0),    # Yellow
+        '4': (0, 255, 0),      # Green
+        '5': (0, 255, 255),    # Cyan
+        '6': (0, 0, 255),      # Blue
+        '7': (127, 0, 255),    # Purple
+        '8': (255, 0, 255),    # Magenta
+        '9': (255, 255, 255),  # White
+        '0': (0, 0, 0),        # Black (off)
+    }
+    
+    # Set terminal to non-blocking mode for key reading
+    if sys.platform != 'win32':
+        import tty
+        import termios
+        old_settings = termios.tcgetattr(sys.stdin)
+        try:
+            tty.setcbreak(sys.stdin.fileno())
+            while True:
+                if stop_event and stop_event.is_set():
+                    break
+                
+                # Check if key is available
+                if select.select([sys.stdin], [], [], 0.05)[0]:
+                    key = sys.stdin.read(1)
+                    
+                    if key.lower() == 'q':
+                        break
+                    
+                    if key in key_colors:
+                        r, g, b = key_colors[key]
+                        for ip in ips:
+                            set_color_rgb(ip, r, g, b)
+                        print(f"Flash: {key} -> RGB({r}, {g}, {b})")
+        finally:
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+    else:
+        # Windows fallback - simpler input mode
+        print("(Windows mode: type key and press Enter)")
+        while True:
+            if stop_event and stop_event.is_set():
+                break
+            try:
+                key = input("Key (1-9, 0, q to quit): ").strip()
+                if key.lower() == 'q':
+                    break
+                if key in key_colors:
+                    r, g, b = key_colors[key]
+                    for ip in ips:
+                        set_color_rgb(ip, r, g, b)
+                    print(f"Flash: {key} -> RGB({r}, {g}, {b})")
+            except (EOFError, KeyboardInterrupt):
+                break
+    
+    print("\nExiting synth mode.")
+
+
 def main():
-    print("Scanning 192.168.1.0-255 (no broadcast) for WIZ devices...")
-    discovered = scan_192_168_1_range(start=0, end=255, workers=80)
+    config = load_config()
+    base_ip = config.get("base_ip", "192.168.1")
+    
+    # Try to load from cache first
+    discovered = load_cache()
+    if discovered:
+        print(f"Loaded {len(discovered)} bulb(s) from cache.")
+        print("Use 'rescan' option to refresh the bulb list.")
+    else:
+        print(f"Scanning {base_ip}.0-255 (no broadcast) for WIZ devices...")
+        discovered = scan_ip_range(base_ip=base_ip, start=0, end=255, workers=80)
+        if discovered:
+            save_cache(discovered)
+            print(f"Found {len(discovered)} bulb(s). Cached for future use.")
+    
     ips = sorted(discovered.keys())
     selected = prompt_user_selection(ips, discovered)
     if not selected:
@@ -386,6 +716,34 @@ def main():
         # Choose effect
         effect = choose_effect()
         
+        # Handle rescan
+        if effect == "rescan":
+            print(f"\nRescanning {base_ip}.0-255 for WIZ devices...")
+            discovered = scan_ip_range(base_ip=base_ip, start=0, end=255, workers=80)
+            if discovered:
+                save_cache(discovered)
+                print(f"Found {len(discovered)} bulb(s). Cache updated.")
+            else:
+                print("No bulbs found during rescan.")
+            ips = sorted(discovered.keys())
+            # Re-select if current selection is invalid
+            selected = [ip for ip in selected if ip in ips]
+            if not selected:
+                selected = prompt_user_selection(ips, discovered)
+                if not selected:
+                    print("No lights selected. Exiting.")
+                    return
+            continue
+        
+        # Handle change bulbs
+        if effect == "change_bulbs":
+            selected = change_bulb_selection(ips, discovered, selected)
+            if not selected:
+                print("No lights selected. Exiting.")
+                return
+            continue
+        
+        # Handle one-time effects
         if effect == "white":
             kelvin = get_kelvin_temperature()
             run_white(selected, kelvin)
@@ -395,7 +753,22 @@ def main():
             except KeyboardInterrupt:
                 print("\nExiting.")
                 break
-        elif effect in ["rainbow_in_unison", "rainbow", "spooky"]:
+        
+        elif effect == "rgba":
+            run_rgba(selected)
+            print("\nPress Enter to change mode or Ctrl+C to exit.")
+            try:
+                input()
+            except KeyboardInterrupt:
+                print("\nExiting.")
+                break
+        
+        elif effect == "synth":
+            # Synth mode handles its own input
+            run_synth(selected, stop_event)
+        
+        # Handle continuous effects
+        elif effect in ["rainbow_in_unison", "rainbow", "spooky", "party"]:
             # Run effect in background thread
             if effect == "rainbow_in_unison":
                 effect_thread = threading.Thread(target=run_rainbow_in_unison, args=(selected, stop_event))
@@ -403,6 +776,8 @@ def main():
                 effect_thread = threading.Thread(target=run_rainbow, args=(selected, stop_event))
             elif effect == "spooky":
                 effect_thread = threading.Thread(target=run_spooky, args=(selected, stop_event))
+            elif effect == "party":
+                effect_thread = threading.Thread(target=run_party, args=(selected, stop_event))
             
             effect_thread.daemon = True
             effect_thread.start()
