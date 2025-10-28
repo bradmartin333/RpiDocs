@@ -58,6 +58,8 @@ def load_config() -> dict:
         try:
             with open(CONFIG_FILE, 'w') as f:
                 json.dump(default_config, f, indent=2)
+            # Set restrictive permissions (owner read/write only)
+            os.chmod(CONFIG_FILE, 0o600)
         except Exception as e:
             print(f"Warning: Could not create config file: {e}")
         return default_config
@@ -78,6 +80,8 @@ def save_cache(discovered: Dict[str, dict]) -> None:
     try:
         with open(CACHE_FILE, 'w') as f:
             json.dump(discovered, f, indent=2)
+        # Set restrictive permissions (owner read/write only)
+        os.chmod(CACHE_FILE, 0o600)
     except Exception as e:
         print(f"Warning: Could not save cache: {e}")
 
@@ -552,7 +556,7 @@ def run_rgba(ips: List[str]):
     r, g, b, dimming = get_rgba_input()
     print(f"Setting lights to RGB({r}, {g}, {b}) with {dimming}% brightness...")
     for ip in ips:
-        set_color_rgb(ip, r, g, b, dimming=dimming)
+        set_color_rgb(ip, r, g, b, transition=0, dimming=dimming)
     print("Done.")
 
 def run_party(ips: List[str], stop_event: threading.Event = None, duration=None):
