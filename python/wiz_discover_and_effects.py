@@ -11,6 +11,12 @@ and provide simple effects:
  - rgba: set custom RGBA color with dimming control
  - party: random colorful flashing party mode
  - synth: flash bulbs using number keys like a synthesizer
+ - reactive: uses the microphone to control the lights based on audio levels
+ - seasonal: applies color schemes based on the current date/season
+ - danger: a scary red strobe effect
+ - lightning: stormy skies with random lightning flashes
+ - waterfall: turbulent blues and white flowing effect
+ - fungi: a fun and funky psychedelic animation
 
 Usage:
     python3 wiz_discover_and_effects.py
@@ -23,6 +29,7 @@ Notes:
  - Effects run in the background and can be changed by pressing Enter (no need for Ctrl+C).
  - Press Ctrl+C to exit the program completely.
  - Discovered bulbs are cached for faster startup. Use rescan option to refresh.
+ - Reactive mode requires PyAudio library (install with: pip install pyaudio)
 """
 
 import socket
@@ -36,6 +43,7 @@ import math
 import os
 import sys
 import select
+from datetime import datetime
 from typing import Dict, List, Tuple, Optional
 
 WIZ_PORT = 38899
@@ -332,34 +340,83 @@ def change_bulb_selection(lights: List[str], info: Dict[str, dict], current: Lis
     return chosen if chosen else current
 
 def choose_effect() -> str:
-    print("\nAvailable effects:")
-    print("  1) rainbow_in_unison  - all lights cycle through the same hues together")
-    print("  2) rainbow            - lights cycle through hues with offsets (not in unison)")
-    print("  3) spooky             - Halloween effect (orange/purple flicker and strobes)")
-    print("  4) white              - reset to white at a specified temperature in Kelvin")
-    print("  5) rgba               - set custom RGBA color with dimming control")
-    print("  6) party              - random colorful flashing party mode")
-    print("  7) synth              - flash bulbs using number keys (synthesizer mode)")
-    print("  c) change_bulbs       - change selected bulbs")
-    print("  r) rescan             - rescan for bulbs")
-    choice = input("Choose effect [1]: ").strip().lower()
-    if choice in ("2", "rainbow"):
-        return "rainbow"
-    if choice in ("3", "spooky"):
-        return "spooky"
-    if choice in ("4", "white"):
-        return "white"
-    if choice in ("5", "rgba"):
-        return "rgba"
-    if choice in ("6", "party"):
-        return "party"
-    if choice in ("7", "synth"):
-        return "synth"
-    if choice in ("c", "change_bulbs"):
-        return "change_bulbs"
-    if choice in ("r", "rescan"):
-        return "rescan"
-    return "rainbow_in_unison"
+    """
+    Display available effects menu and get user choice.
+    Now organized by category for better usability.
+    """
+    print("\n" + "="*60)
+    print("AVAILABLE EFFECTS".center(60))
+    print("="*60)
+    
+    print("\n🌈 RAINBOW EFFECTS:")
+    print("  rainbow_in_unison - all lights cycle colors together")
+    print("  rainbow           - lights cycle colors with offsets")
+    print("  party             - random colorful flashing")
+    print("  fungi             - psychedelic funky animation")
+    
+    print("\n🎃 THEMED EFFECTS:")
+    print("  spooky            - Halloween orange/purple flickers")
+    print("  seasonal          - colors based on current season")
+    print("  danger            - scary red strobe alarm")
+    
+    print("\n⛈️  NATURE EFFECTS:")
+    print("  lightning         - stormy skies with lightning")
+    print("  waterfall         - flowing blues and white")
+    
+    print("\n🎵 INTERACTIVE:")
+    print("  reactive          - responds to microphone audio")
+    print("  synth             - flash colors with number keys")
+    
+    print("\n⚙️  UTILITIES:")
+    print("  white             - set to white color temperature")
+    print("  rgba              - set custom RGBA color")
+    
+    print("\n📋 OPTIONS:")
+    print("  change_bulbs      - select different bulbs")
+    print("  rescan            - scan network for new bulbs")
+    
+    print("\n" + "="*60)
+    
+    choice = input("Choose effect [rainbow_in_unison]: ").strip().lower()
+    
+    # Map choices to effect names
+    effect_map = {
+        "rainbow_in_unison": "rainbow_in_unison",
+        "rainbow": "rainbow",
+        "spooky": "spooky",
+        "white": "white",
+        "rgba": "rgba",
+        "party": "party",
+        "synth": "synth",
+        "reactive": "reactive",
+        "seasonal": "seasonal",
+        "danger": "danger",
+        "lightning": "lightning",
+        "waterfall": "waterfall",
+        "fungi": "fungi",
+        "change_bulbs": "change_bulbs",
+        "rescan": "rescan",
+    }
+    
+    # Allow partial matches for convenience
+    if not choice:
+        return "rainbow_in_unison"
+    
+    # Try exact match first
+    if choice in effect_map:
+        return effect_map[choice]
+    
+    # Try prefix matching
+    matches = [name for name in effect_map.keys() if name.startswith(choice)]
+    if len(matches) == 1:
+        return matches[0]
+    elif len(matches) > 1:
+        print(f"Ambiguous choice. Did you mean one of: {', '.join(matches)}?")
+        return choose_effect()
+    
+    # No match found
+    print(f"Unknown effect: {choice}. Please try again.")
+    return choose_effect()
 
 def get_kelvin_temperature() -> int:
     """
@@ -682,6 +739,399 @@ def run_synth(ips: List[str], stop_event: threading.Event = None):
     print("\nExiting synth mode.")
 
 
+def run_reactive(ips: List[str], stop_event: threading.Event = None, duration=None):
+    """
+    Reactive mode: Uses microphone to control lights based on audio levels.
+    Requires PyAudio library.
+    stop_event: threading.Event to signal when to stop
+    """
+    print("Running reactive mode. Press Enter to stop or change mode.")
+    
+    # Try to import PyAudio
+    try:
+        import pyaudio
+        import numpy as np
+    except ImportError:
+        print("\nError: PyAudio not installed. Install with: pip install pyaudio")
+        print("Falling back to simulated reactive mode...")
+        time.sleep(2)
+        # Fallback to simulated mode
+        run_reactive_simulated(ips, stop_event, duration)
+        return
+    
+    # Audio configuration
+    CHUNK = 1024
+    FORMAT = pyaudio.paInt16
+    CHANNELS = 1
+    RATE = 44100
+    
+    t0 = time.time()
+    
+    try:
+        p = pyaudio.PyAudio()
+        stream = p.open(format=FORMAT,
+                       channels=CHANNELS,
+                       rate=RATE,
+                       input=True,
+                       frames_per_buffer=CHUNK)
+        
+        print("Listening to microphone...")
+        
+        while True:
+            if stop_event and stop_event.is_set():
+                break
+            if duration and (time.time() - t0) >= duration:
+                break
+            
+            try:
+                # Read audio data
+                data = stream.read(CHUNK, exception_on_overflow=False)
+                audio_data = np.frombuffer(data, dtype=np.int16)
+                
+                # Calculate audio level (RMS)
+                rms = np.sqrt(np.mean(audio_data**2))
+                
+                # Normalize to 0-1 range (adjust sensitivity)
+                level = min(1.0, rms / 5000.0)
+                
+                # Map audio level to color (low = blue, high = red)
+                hue = (1.0 - level) * 240  # 240 = blue, 0 = red
+                sat = 0.9
+                val = 0.3 + (level * 0.7)  # Brightness increases with volume
+                
+                r, g, b = hsv_to_rgb_255(hue, sat, val)
+                
+                for ip in ips:
+                    set_color_rgb(ip, r, g, b)
+                
+                time.sleep(0.05)  # Small delay for responsiveness
+                
+            except Exception as e:
+                print(f"Audio read error: {e}")
+                break
+        
+        stream.stop_stream()
+        stream.close()
+        p.terminate()
+        
+    except Exception as e:
+        print(f"Error initializing audio: {e}")
+        print("Falling back to simulated mode...")
+        run_reactive_simulated(ips, stop_event, duration)
+    
+    print("\nStopping reactive mode.")
+
+
+def run_reactive_simulated(ips: List[str], stop_event: threading.Event = None, duration=None):
+    """
+    Simulated reactive mode when PyAudio is not available.
+    Creates a pulsing effect that simulates audio reactivity.
+    """
+    print("Running simulated reactive mode...")
+    t0 = time.time()
+    
+    try:
+        while True:
+            if stop_event and stop_event.is_set():
+                break
+            if duration and (time.time() - t0) >= duration:
+                break
+            
+            # Simulate audio with sine wave
+            elapsed = time.time() - t0
+            level = (math.sin(elapsed * 3.0) + 1.0) / 2.0  # 0-1
+            
+            # Add some randomness
+            level = level * random.uniform(0.7, 1.3)
+            level = max(0.0, min(1.0, level))
+            
+            # Map to color
+            hue = (1.0 - level) * 240
+            sat = 0.9
+            val = 0.3 + (level * 0.7)
+            
+            r, g, b = hsv_to_rgb_255(hue, sat, val)
+            
+            for ip in ips:
+                set_color_rgb(ip, r, g, b)
+            
+            time.sleep(SEND_INTERVAL)
+            
+    except KeyboardInterrupt:
+        print("\nStopping effect.")
+
+
+def run_seasonal(ips: List[str], stop_event: threading.Event = None, duration=None):
+    """
+    Seasonal mode: Applies color schemes based on current date/season.
+    - Winter (Dec-Feb): Cool blues and whites
+    - Spring (Mar-May): Fresh greens and pastels
+    - Summer (Jun-Aug): Bright yellows and warm colors
+    - Fall (Sep-Nov): Orange, red, and brown tones
+    stop_event: threading.Event to signal when to stop
+    """
+    print("Running seasonal mode. Press Enter to stop or change mode.")
+    
+    # Determine current season
+    now = datetime.now()
+    month = now.month
+    
+    if month in [12, 1, 2]:
+        season = "winter"
+        print(f"Current season: Winter")
+        colors = [(180, 220, 255), (200, 230, 255), (150, 200, 255), (255, 255, 255)]
+    elif month in [3, 4, 5]:
+        season = "spring"
+        print(f"Current season: Spring")
+        colors = [(100, 255, 150), (150, 255, 200), (255, 200, 220), (200, 255, 255)]
+    elif month in [6, 7, 8]:
+        season = "summer"
+        print(f"Current season: Summer")
+        colors = [(255, 255, 100), (255, 200, 50), (255, 150, 50), (255, 100, 100)]
+    else:  # Fall: Sep, Oct, Nov
+        season = "fall"
+        print(f"Current season: Fall")
+        colors = [(255, 140, 0), (255, 100, 50), (200, 80, 40), (180, 50, 30)]
+    
+    t0 = time.time()
+    color_index = 0
+    
+    try:
+        while True:
+            if stop_event and stop_event.is_set():
+                break
+            if duration and (time.time() - t0) >= duration:
+                break
+            
+            # Gradually transition through seasonal colors
+            base_color = colors[color_index % len(colors)]
+            
+            # Add subtle variation
+            r = max(0, min(255, base_color[0] + random.randint(-15, 15)))
+            g = max(0, min(255, base_color[1] + random.randint(-15, 15)))
+            b = max(0, min(255, base_color[2] + random.randint(-15, 15)))
+            
+            for ip in ips:
+                set_color_rgb(ip, r, g, b)
+            
+            # Slow transition
+            if random.random() < 0.05:
+                color_index += 1
+            
+            time.sleep(SEND_INTERVAL * 3)
+            
+    except KeyboardInterrupt:
+        print("\nStopping effect.")
+
+
+def run_danger(ips: List[str], stop_event: threading.Event = None, duration=None):
+    """
+    Danger mode: A scary red strobe effect.
+    stop_event: threading.Event to signal when to stop
+    """
+    print("Running danger mode. Press Enter to stop or change mode.")
+    t0 = time.time()
+    
+    try:
+        while True:
+            if stop_event and stop_event.is_set():
+                break
+            if duration and (time.time() - t0) >= duration:
+                break
+            
+            # Intense red strobe pattern
+            pattern = random.choice(["fast_strobe", "slow_pulse", "flicker"])
+            
+            if pattern == "fast_strobe":
+                # Rapid on/off
+                for _ in range(random.randint(3, 8)):
+                    for ip in ips:
+                        set_color_rgb(ip, 255, 0, 0)
+                    time.sleep(0.05)
+                    for ip in ips:
+                        set_color_rgb(ip, 0, 0, 0)
+                    time.sleep(0.05)
+                time.sleep(random.uniform(0.3, 0.8))
+            
+            elif pattern == "slow_pulse":
+                # Pulsing red
+                for intensity in range(0, 255, 20):
+                    if stop_event and stop_event.is_set():
+                        break
+                    for ip in ips:
+                        set_color_rgb(ip, intensity, 0, 0)
+                    time.sleep(0.03)
+                for intensity in range(255, 0, -20):
+                    if stop_event and stop_event.is_set():
+                        break
+                    for ip in ips:
+                        set_color_rgb(ip, intensity, 0, 0)
+                    time.sleep(0.03)
+            
+            elif pattern == "flicker":
+                # Erratic flickering
+                for _ in range(random.randint(5, 15)):
+                    r = random.randint(150, 255)
+                    for ip in ips:
+                        set_color_rgb(ip, r, 0, 0)
+                    time.sleep(random.uniform(0.02, 0.1))
+                
+    except KeyboardInterrupt:
+        print("\nStopping effect.")
+
+
+def run_lightning(ips: List[str], stop_event: threading.Event = None, duration=None):
+    """
+    Lightning mode: Stormy skies with random lightning flashes.
+    stop_event: threading.Event to signal when to stop
+    """
+    print("Running lightning mode. Press Enter to stop or change mode.")
+    t0 = time.time()
+    last_lightning = time.time()
+    
+    try:
+        while True:
+            if stop_event and stop_event.is_set():
+                break
+            if duration and (time.time() - t0) >= duration:
+                break
+            
+            now = time.time()
+            
+            # Random lightning strikes
+            if now - last_lightning > random.uniform(1.0, 5.0):
+                # Lightning strike!
+                strike_type = random.choice(["single", "double", "triple"])
+                
+                if strike_type == "single":
+                    for ip in ips:
+                        set_color_rgb(ip, 255, 255, 255)
+                    time.sleep(random.uniform(0.03, 0.08))
+                    for ip in ips:
+                        set_color_rgb(ip, 30, 30, 50)
+                
+                elif strike_type == "double":
+                    for _ in range(2):
+                        for ip in ips:
+                            set_color_rgb(ip, 255, 255, 255)
+                        time.sleep(random.uniform(0.02, 0.05))
+                        for ip in ips:
+                            set_color_rgb(ip, 30, 30, 50)
+                        time.sleep(random.uniform(0.1, 0.2))
+                
+                else:  # triple
+                    for _ in range(3):
+                        brightness = random.randint(200, 255)
+                        for ip in ips:
+                            set_color_rgb(ip, brightness, brightness, brightness)
+                        time.sleep(random.uniform(0.02, 0.04))
+                        for ip in ips:
+                            set_color_rgb(ip, 30, 30, 50)
+                        time.sleep(random.uniform(0.05, 0.15))
+                
+                last_lightning = now
+            else:
+                # Dark stormy sky between lightning
+                r = random.randint(25, 40)
+                g = random.randint(25, 40)
+                b = random.randint(40, 60)
+                for ip in ips:
+                    set_color_rgb(ip, r, g, b)
+                time.sleep(SEND_INTERVAL * 2)
+                
+    except KeyboardInterrupt:
+        print("\nStopping effect.")
+
+
+def run_waterfall(ips: List[str], stop_event: threading.Event = None, duration=None):
+    """
+    Waterfall mode: Turbulent blues and white flowing effect.
+    stop_event: threading.Event to signal when to stop
+    """
+    print("Running waterfall mode. Press Enter to stop or change mode.")
+    t0 = time.time()
+    
+    try:
+        while True:
+            if stop_event and stop_event.is_set():
+                break
+            if duration and (time.time() - t0) >= duration:
+                break
+            
+            # Create flowing water effect
+            for i, ip in enumerate(ips):
+                # Use time and position to create wave effect
+                elapsed = time.time() - t0
+                wave = math.sin(elapsed * 2.0 + i * 0.5) * 0.5 + 0.5
+                
+                # Mix between deep blue and white
+                if random.random() < 0.15:
+                    # White foam
+                    r = random.randint(200, 255)
+                    g = random.randint(220, 255)
+                    b = random.randint(240, 255)
+                else:
+                    # Blue water with varying intensity
+                    base_blue = int(wave * 100 + 100)
+                    r = random.randint(0, 30)
+                    g = random.randint(40, 100)
+                    b = random.randint(base_blue, min(255, base_blue + 80))
+                
+                set_color_rgb(ip, r, g, b)
+            
+            time.sleep(SEND_INTERVAL * 0.8)
+            
+    except KeyboardInterrupt:
+        print("\nStopping effect.")
+
+
+def run_fungi(ips: List[str], stop_event: threading.Event = None, duration=None):
+    """
+    Fungi mode: A fun and funky psychedelic animation.
+    stop_event: threading.Event to signal when to stop
+    """
+    print("Running fungi mode. Press Enter to stop or change mode.")
+    t0 = time.time()
+    
+    try:
+        while True:
+            if stop_event and stop_event.is_set():
+                break
+            if duration and (time.time() - t0) >= duration:
+                break
+            
+            elapsed = time.time() - t0
+            
+            # Create psychedelic patterns
+            for i, ip in enumerate(ips):
+                # Multiple overlapping waves create trippy effect
+                wave1 = math.sin(elapsed * 1.5 + i * 0.8)
+                wave2 = math.cos(elapsed * 2.3 + i * 1.2)
+                wave3 = math.sin(elapsed * 0.7 + i * 0.5)
+                
+                # Map waves to hue (full spectrum)
+                hue = ((wave1 + wave2 + wave3) * 60 + elapsed * 30 + i * 40) % 360
+                
+                # High saturation and varying brightness for psychedelic effect
+                sat = 0.8 + wave1 * 0.2
+                val = 0.6 + wave2 * 0.3
+                
+                r, g, b = hsv_to_rgb_255(hue, max(0.0, min(1.0, sat)), max(0.0, min(1.0, val)))
+                
+                # Add occasional sparkle
+                if random.random() < 0.05:
+                    r = min(255, r + random.randint(50, 100))
+                    g = min(255, g + random.randint(50, 100))
+                    b = min(255, b + random.randint(50, 100))
+                
+                set_color_rgb(ip, r, g, b)
+            
+            time.sleep(SEND_INTERVAL)
+            
+    except KeyboardInterrupt:
+        print("\nStopping effect.")
+
+
 def main():
     config = load_config()
     base_ip = config.get("base_ip", "192.168.1")
@@ -772,7 +1222,7 @@ def main():
             run_synth(selected, stop_event)
         
         # Handle continuous effects
-        elif effect in ["rainbow_in_unison", "rainbow", "spooky", "party"]:
+        elif effect in ["rainbow_in_unison", "rainbow", "spooky", "party", "reactive", "seasonal", "danger", "lightning", "waterfall", "fungi"]:
             # Run effect in background thread
             if effect == "rainbow_in_unison":
                 effect_thread = threading.Thread(target=run_rainbow_in_unison, args=(selected, stop_event))
@@ -782,6 +1232,18 @@ def main():
                 effect_thread = threading.Thread(target=run_spooky, args=(selected, stop_event))
             elif effect == "party":
                 effect_thread = threading.Thread(target=run_party, args=(selected, stop_event))
+            elif effect == "reactive":
+                effect_thread = threading.Thread(target=run_reactive, args=(selected, stop_event))
+            elif effect == "seasonal":
+                effect_thread = threading.Thread(target=run_seasonal, args=(selected, stop_event))
+            elif effect == "danger":
+                effect_thread = threading.Thread(target=run_danger, args=(selected, stop_event))
+            elif effect == "lightning":
+                effect_thread = threading.Thread(target=run_lightning, args=(selected, stop_event))
+            elif effect == "waterfall":
+                effect_thread = threading.Thread(target=run_waterfall, args=(selected, stop_event))
+            elif effect == "fungi":
+                effect_thread = threading.Thread(target=run_fungi, args=(selected, stop_event))
             
             effect_thread.daemon = True
             effect_thread.start()
