@@ -411,12 +411,14 @@ def choose_effect() -> str:
     if len(matches) == 1:
         return matches[0]
     elif len(matches) > 1:
-        print(f"Ambiguous choice. Did you mean one of: {', '.join(matches)}?")
-        return choose_effect()
+        print(f"Ambiguous choice '{choice}'. Matches: {', '.join(matches)}")
+        print("Please use a more specific name.")
+        # Return first match as fallback instead of recursing
+        return matches[0]
     
-    # No match found
-    print(f"Unknown effect: {choice}. Please try again.")
-    return choose_effect()
+    # No match found - return default instead of recursing
+    print(f"Unknown effect: '{choice}'. Using default (rainbow_in_unison).")
+    return "rainbow_in_unison"
 
 def get_kelvin_temperature() -> int:
     """
